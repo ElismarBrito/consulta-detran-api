@@ -1,0 +1,19 @@
+{
+  "name": "consulta-detran-api",
+  "version": "1.0.0",
+  "main": "consulta-detran.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "2captcha": "^3.0.5-2",
+    "axios": "^1.9.0",
+    "express": "^5.1.0",
+    "puppeteer": "^24.10.0"
+  },
+  "description": ""
+}
