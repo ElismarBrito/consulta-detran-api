@@ -1,8 +1,9 @@
 // ================================
-// services/consultaDetranService.js
+// services/consultaDetranService.js (VERSÃO ATUALIZADA)
 // ================================
 
 const puppeteer = require('puppeteer');
+const cheerio = require('cheerio'); // Importar Cheerio
 const captchaSolver = require('../utils/captchaSolver');
 
 const PAGE_URL = 'https://www.detran.rj.gov.br/consultas/consultas-drv/nada-consta.html';
@@ -24,30 +25,25 @@ class ConsultaDetranService {
       });
 
       const page = await browser.newPage();
-      
-      // Configurações da página
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
       await page.setViewport({ width: 1366, height: 768 });
 
       console.log('Navegando para o site do Detran...');
       await page.goto(PAGE_URL, { 
         waitUntil: 'networkidle2',
-        timeout: 30000 
+        timeout: 45000 
       });
 
-      // Preenchimento dos campos
       console.log('Preenchendo formulário...');
-      await page.waitForSelector('input[name="renavam"]', { timeout: 10000 });
-      await page.type('input[name="renavam"]', renavam, { delay: 100 });
+      await page.waitForSelector('input[name="data[Multas][renavam]"]', { timeout: 10000 });
+      await page.type('input[name="data[Multas][renavam]"]', renavam, { delay: 100 });
       
-      await page.waitForSelector('input[name="cpfCnpj"]', { timeout: 10000 });
-      await page.type('input[name="cpfCnpj"]', cpf, { delay: 100 });
+      await page.waitForSelector('input[name="data[Multas][cpfcnpj]"]', { timeout: 10000 });
+      await page.type('input[name="data[Multas][cpfcnpj]"]', cpf, { delay: 100 });
 
-      // Resolver CAPTCHA
       console.log('Resolvendo CAPTCHA...');
       const token = await captchaSolver.resolve(PAGE_URL);
 
-      // Inserir token do CAPTCHA
       await page.evaluate((token) => {
         const el = document.querySelector('#g-recaptcha-response');
         if (el) {
@@ -56,73 +52,102 @@ class ConsultaDetranService {
         }
       }, token);
 
-      // Submeter formulário
       console.log('Submetendo formulário...');
       await Promise.all([
         page.click('input[type="submit"]'),
         page.waitForNavigation({ 
           waitUntil: 'networkidle2',
-          timeout: 30000 
+          timeout: 45000 
         }),
       ]);
 
-      // Extrair resultado
-      const resultado = await this.extrairResultado(page);
+      const html = await page.content();
+      const resultado = this.extrairResultado(html);
       
       return {
-        status: resultado.status,
-        cpf: cpf.replace(/\d(?=\d{3})/g, '*'), // Mascarar CPF na resposta
+        ...resultado,
+        cpf: cpf.replace(/\d(?=\d{4})/g, '*'), // Mascarar CPF na resposta
         renavam,
-        resultado: resultado.mensagem,
         dataConsulta: new Date().toISOString()
       };
 
     } catch (erro) {
       console.error('Erro na consulta:', erro.message);
+      // Captura de tela para depuração
+      if(page) await page.screenshot({ path: 'erro_screenshot.png' });
       throw new Error('Falha na consulta ao Detran: ' + erro.message);
     } finally {
       if (browser) {
         await browser.close();
+        console.log('Browser fechado.');
       }
     }
   }
 
-  async extrairResultado(page) {
-    try {
-      const html = await page.content();
-      
-      // Verificar diferentes padrões de resposta
-      if (html.includes('NADA CONSTA') || html.includes('nada consta')) {
-        return {
-          status: 'regular',
-          mensagem: 'Nada consta - Situação regular'
-        };
-      }
-      
-      if (html.includes('PENDÊNCIA') || html.includes('pendência')) {
-        return {
-          status: 'pendencia',
-          mensagem: 'Existem pendências'
-        };
-      }
-      
-      if (html.includes('ERRO') || html.includes('erro')) {
-        return {
-          status: 'erro',
-          mensagem: 'Erro na consulta - Verifique os dados informados'
-        };
-      }
+  extrairResultado(html) {
+    const $ = cheerio.load(html);
 
-      // Se não encontrou padrões conhecidos, retornar para análise manual
+    if (html.toLowerCase().includes('nada consta')) {
       return {
-        status: 'verificar',
-        mensagem: 'Resultado requer verificação manual',
-        html: html.length > 1000 ? html.substring(0, 1000) + '...' : html
+        status: 'regular',
+        resultado: 'Nada consta - Situação regular',
+        multas: []
       };
-
-    } catch (erro) {
-      throw new Error('Erro ao extrair resultado: ' + erro.message);
     }
+
+    const multas = [];
+    const totalMultasText = $('.paginate').first().text().trim();
+    
+    $('table.tabelaDescricao').each((i, table) => {
+      const multa = {};
+      const rows = $(table).find('tbody > tr');
+      
+      multa.statusInfração = $(table).find('thead th').text().trim();
+      
+      const getTextAfterBr = (td) => $(td).html().split('<br>')[1]?.trim() || '';
+      
+      // Linha 1
+      multa.autoDeInfracao = getTextAfterBr($(rows[0]).find('td').eq(0));
+      multa.autoDeRenainf = getTextAfterBr($(rows[0]).find('td').eq(1));
+      multa.pagamentoComDesconto = getTextAfterBr($(rows[0]).find('td').eq(2));
+      
+      // Linha 2
+      multa.enquadramento = getTextAfterBr($(rows[1]).find('td').eq(0));
+      multa.data = getTextAfterBr($(rows[1]).find('td').eq(1));
+      multa.hora = getTextAfterBr($(rows[1]).find('td').eq(2));
+      
+      // Linha 3
+      multa.descricao = getTextAfterBr($(rows[2]).find('td').eq(0));
+      multa.placa = getTextAfterBr($(rows[2]).find('td').eq(1));
+      
+      // Linha 4
+      multa.local = getTextAfterBr($(rows[3]).find('td').eq(0));
+      multa.valorOriginal = getTextAfterBr($(rows[3]).find('td').eq(1));
+      multa.valorAPagar = getTextAfterBr($(rows[3]).find('td').eq(2));
+      
+      // Linha 5
+      multa.statusPagamento = getTextAfterBr($(rows[4]).find('td').eq(0));
+      multa.orgaoEmissor = getTextAfterBr($(rows[4]).find('td').eq(1));
+      multa.agenteEmissor = getTextAfterBr($(rows[4]).find('td').eq(2));
+
+      multas.push(multa);
+    });
+
+    if (multas.length > 0) {
+      return {
+        status: 'pendencia',
+        resultado: totalMultasText || `${multas.length} multa(s) encontrada(s).`,
+        multas
+      };
+    }
+    
+    // Fallback para erro ou dados não encontrados
+    const mensagemErro = $('#caixaInformacao').text().trim();
+    return {
+      status: 'erro',
+      resultado: mensagemErro || 'Dados não encontrados ou formato de resposta inesperado.',
+      multas: []
+    };
   }
 }
 
